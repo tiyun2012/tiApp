@@ -111,8 +111,14 @@ export async function init({ container, services, onClose }) {
 
         // ⚡ CRITICAL UPDATES: Force everything to refresh immediately
         if (obj.updateMatrixWorld) obj.updateMatrixWorld(); // Update Physics
-        services.controlsSvc.update(); // Update Selection Box Helper
-        services.rendererSvc.renderer.render(services.rendererSvc.scene, services.rendererSvc.camera); // Re-draw Scene
+        
+        // Emit custom event so ControlsService knows to move the BoxHelper
+        eventBus.dispatchEvent(new CustomEvent('object:transformed', { 
+          detail: { objectId: obj.id } 
+        }));
+
+        // Re-draw Scene
+        services.rendererSvc.renderer.render(services.rendererSvc.scene, services.rendererSvc.camera); 
       };
 
       row.appendChild(input);

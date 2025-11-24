@@ -5,19 +5,26 @@ import eventBus from "./EventBus.js";
 
 export class ControlsService {
   constructor(cam, el, sceneSvc) {
-    this.sceneSvc = sceneSvc; this.helpers = new Map();
+    this.sceneSvc = sceneSvc; 
+    this.helpers = new Map();
     this.camera = cam;
-    this.orbit = new OrbitControls(cam, el); this.orbit.enableDamping = true;
+    this.orbit = new OrbitControls(cam, el); 
+    this.orbit.enableDamping = true;
     this.transform = new TransformControls(cam, el);
     this.transform.addEventListener("dragging-changed", e => this.orbit.enabled = !e.value);
     el.parentElement.appendChild(this.transform.domElement);
     
     eventBus.addEventListener("selection:changed", e => {
-      this.transform.detach(); this.helpers.forEach(h => h.removeFromParent()); this.helpers.clear();
+      this.transform.detach(); 
+      this.helpers.forEach(h => h.removeFromParent()); 
+      this.helpers.clear();
+      
       e.detail.ids.forEach(id => {
         const o = sceneSvc.getObject(id);
         if(o) {
-          const h = new THREE.BoxHelper(o, 0x007fd4); sceneSvc.scene.add(h); this.helpers.set(id, h);
+          const h = new THREE.BoxHelper(o, 0x007fd4); 
+          sceneSvc.scene.add(h); 
+          this.helpers.set(id, h);
           this.transform.attach(o);
         }
       });
@@ -32,10 +39,19 @@ export class ControlsService {
     });
   }
 
-  // ✅ NEW: Called every frame to sync helpers with moving objects
+  // ✅ FIXED: Properly update BoxHelpers with their objects
   update() {
     this.orbit.update();
-    this.helpers.forEach(h => h.update());
+    
+    // Update each BoxHelper with its corresponding object
+    this.helpers.forEach((helper, objectId) => {
+      const obj = this.sceneSvc.getObject(objectId);
+      if (obj) {
+        // Ensure the object's world matrix is current before the helper reads it
+        obj.updateMatrixWorld(); 
+        helper.update(obj);
+      }
+    });
   }
 
   focusOnSelection() {
