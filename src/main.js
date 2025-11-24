@@ -24,9 +24,9 @@ async function bootstrap() {
     const controlsSvc = new ControlsService(rendererSvc.camera, rendererSvc.renderer.domElement, sceneSvc);
     const pickingSvc = new PickingService(rendererSvc, sceneSvc, controlsSvc);
 
-    // ✅ OPTIMIZED LISTENER: Only force update if selection exists
+    // ✅ SAFE LISTENER: Checks for existence before access
     eventBus.addEventListener('object:transformed', () => {
-      if (sceneSvc.selectedIds.size > 0) {
+      if (sceneSvc && sceneSvc.selectedIds && sceneSvc.selectedIds.size > 0) {
         controlsSvc.update(); 
       }
     });
