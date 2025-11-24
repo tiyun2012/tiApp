@@ -1,1 +1,66 @@
-﻿.chip-window .window-content { background:#151515; }
+﻿/* === FILE: tiApp/src/modules/chip-editor/chip-editor.css === */
+:root { --bg: #151515; --panel: #222; --text: #ddd; --accent: #007fd4; --border: #333; }
+body { background: var(--bg); color: var(--text); margin: 0; font-family: Segoe UI, sans-serif; overflow: hidden; }
+
+.chip-header { padding: 10px 15px; background: #1f1f1f; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; -webkit-app-region: drag; }
+.chip-canvas { height: calc(100vh - 40px); background: radial-gradient(#333 1px, transparent 1px) 0 0 / 20px 20px; overflow: auto; position: relative; }
+
+/* NODE CARD */
+.node-card { 
+  background: #2b2b2b; border: 1px solid #444; border-radius: 6px; 
+  width: 240px; position: absolute; 
+  box-shadow: 0 4px 15px rgba(0,0,0,0.6); 
+  display: flex; flex-direction: column;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.node-card:hover { border-color: #555; }
+.node-card:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.3); }
+
+/* HEADER */
+.node-header { 
+  background: #333; padding: 8px 10px; font-weight: bold; font-size: 13px;
+  border-bottom: 1px solid #444; border-radius: 5px 5px 0 0; 
+  display: flex; justify-content: space-between; cursor: grab;
+}
+
+/* PORTS (The little circles) */
+.port {
+  width: 10px; height: 10px; border-radius: 50%; 
+  background: #777; border: 1px solid #222;
+  position: absolute; top: 10px;
+  transition: background 0.2s; cursor: crosshair;
+}
+.port:hover { background: var(--accent); transform: scale(1.2); }
+.port.in { left: -6px; background: #66ccff; } /* Blue for Input Flow */
+.port.out { right: -6px; background: #66ff66; } /* Green for Output Flow */
+
+/* PROPERTIES */
+.node-body { padding: 10px; font-size: 12px; }
+.prop-row { display: flex; align-items: center; margin-bottom: 8px; justify-content: space-between; position: relative; }
+
+/* INPUTS */
+input[type="text"], input[type="number"] {
+  background: #111; border: 1px solid #444; color: #eee;
+  padding: 4px; border-radius: 3px; width: 60px; font-family: monospace;
+  text-align: right; font-size: 11px;
+}
+input[type="color"] {
+  background: none; border: none; width: 30px; height: 20px; cursor: pointer;
+  padding: 0;
+}
+input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+/* LABELS */
+.label { color: #aaa; margin-right: 8px; font-size: 11px; }
+
+/* PORT CONNECTORS ON ROWS (Data Ports) */
+.row-port {
+  width: 8px; height: 8px; border-radius: 50%; background: #555;
+  position: absolute; top: 50%; transform: translateY(-50%);
+  opacity: 0.5; transition: opacity 0.2s;
+}
+.prop-row:hover .row-port { opacity: 1; }
+.row-port.in { left: -14px; background: #ffcc00; } /* Yellow for Data In */
+.row-port.out { right: -14px; background: #ffcc00; } /* Yellow for Data Out */
+
+.empty-state { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #444; text-align: center; pointer-events: none; }

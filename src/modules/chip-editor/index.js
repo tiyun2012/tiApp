@@ -1,150 +1,222 @@
 ﻿import eventBus from "../../services/EventBus.js";
 import { createWindow } from "../../ui/Window.js";
 
-// Dedicated styles for the external window
-const CHIP_STYLES = `
-  :root { --bg: #151515; --panel: #222; --text: #ddd; --accent: #007fd4; --border: #333; }
-  body { background: var(--bg); color: var(--text); margin: 0; font-family: Segoe UI, sans-serif; overflow: hidden; }
-  .chip-header { padding: 10px 15px; background: #1f1f1f; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; -webkit-app-region: drag; }
-  .chip-canvas { height: calc(100vh - 40px); background: radial-gradient(#333 1px, transparent 1px) 0 0 / 20px 20px; overflow: auto; position: relative; }
-  .node-card { background: #2b2b2b; border: 1px solid #444; border-radius: 6px; padding: 0; width: 220px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); position: absolute; transition: border 0.2s; }
-  .node-card:hover { border-color: var(--accent); }
-  .node-header { background: #333; padding: 6px 10px; font-weight: bold; border-bottom: 1px solid #444; border-radius: 5px 5px 0 0; display:flex; justify-content:space-between; }
-  .node-body { padding: 10px; font-size: 12px; color: #aaa; }
-  .prop-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-  .prop-val { color: #fff; font-family: monospace; }
-  .empty-state { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #444; text-align: center; pointer-events: none; }
-`;
+// Helper to locate the CSS file relative to this module
+const CSS_URL = new URL('./chip-editor.css', import.meta.url).href;
 
-export function init({ container, services, onClose }) {
-  // 1. Attempt to Load Saved State
+export async function init({ container, services, onClose }) {
   const storageKey = "ti3d_chip_window";
-  const savedState = localStorage.getItem(storageKey);
-  const defaultFeatures = "width=800,height=600,left=200,top=200";
   
-  // 2. Try Opening Native Window
+  // 1. Fetch CSS text manually
+  // This ensures the popup has styles even if the browser blocks local file links
+  const cssText = await fetch(CSS_URL).then(res => res.text()).catch(() => "");
+
+  // 2. Open Native Window
   let win = null;
   try {
-    win = window.open("", "Ti3D_ChipEditor", savedState || defaultFeatures);
-  } catch (e) { console.warn("Popup blocked"); }
+    const saved = localStorage.getItem(storageKey);
+    // Default size/position if no saved state
+    win = window.open("", "Ti3D_ChipEditor", saved || "width=900,height=600,left=150,top=150");
+  } catch(e) {
+    console.warn("Window open failed", e);
+  }
 
-  // 3. FALLBACK: Internal Window (If blocked)
+  // 3. Fallback: Internal Window (If Popup Blocked)
   if (!win || win.closed) {
-    console.warn("Popup blocked or failed. Falling back to internal window.");
+    console.warn("Popup blocked. Using internal fallback.");
     const internal = createWindow({ title: "🔌 Chip Editor (Internal)", width: 500, height: 400 });
-    internal.querySelector(".window-content").innerHTML = `<div style="padding:20px;text-align:center">Popups blocked.<br>Running in fallback mode.</div>`;
+    internal.querySelector(".window-content").innerHTML = `<div style="padding:20px;text-align:center;color:#888">Popups blocked.<br>Using fallback mode.</div>`;
     return { destroy: () => internal.remove() };
   }
 
-  // =========================================
-  // 🚀 EXTERNAL WINDOW SETUP
-  // =========================================
+  // 4. Setup External Document
+  const doc = win.document;
+  doc.title = "🔌 Node Graph";
+  
+  // Inject Styles
+  const styleEl = doc.createElement("style");
+  styleEl.textContent = cssText;
+  doc.head.appendChild(styleEl);
 
-  // A. inject CSS
-  const styleEl = win.document.createElement("style");
-  styleEl.textContent = CHIP_STYLES;
-  win.document.head.appendChild(styleEl);
-  win.document.title = "🔌 Chip Editor";
-
-  // B. Setup Skeleton
-  win.document.body.innerHTML = `
+  // Inject Skeleton HTML
+  doc.body.innerHTML = `
     <div class="chip-header">
-      <span>Node Graph Active</span>
+      <span>Scene Graph</span>
       <span id="status" style="font-size:11px;opacity:0.6">Ready</span>
     </div>
-    <div class="chip-canvas" id="canvas">
-      <div class="empty-state">
-        <h3>No Selection</h3>
-        <p>Select objects in the 3D Viewport</p>
-      </div>
-    </div>
+    <div class="chip-canvas" id="canvas"></div>
   `;
 
-  const canvas = win.document.getElementById("canvas");
-  const status = win.document.getElementById("status");
+  const canvas = doc.getElementById("canvas");
+  const status = doc.getElementById("status");
 
-  // C. Selection Handler with Debounce
-  let debounceTimer;
-  const updateNodes = (ids) => {
-    canvas.innerHTML = ""; // Clear
+  // ===============================================
+  // 🛠 NODE FACTORY & DATA BINDING
+  // ===============================================
+  const activeNodes = new Map(); // Stores references to DOM elements for updates
+
+  const createNode = (obj, index) => {
+    const node = doc.createElement("div");
+    node.className = "node-card";
+    // Simple cascading layout
+    node.style.left = `${50 + (index * 260)}px`;
+    node.style.top = "50px";
+
+    // Node Header
+    node.innerHTML = `
+      <div class="node-header">
+        <div class="port in" title="Input Flow"></div>
+        <span>${obj.name} <small style="opacity:0.5">(${obj.type})</small></span>
+        <div class="port out" title="Output Object"></div>
+      </div>
+      <div class="node-body"></div>
+    `;
+
+    const body = node.querySelector(".node-body");
+
+    // --- Helper: Create Property Row ---
+    const addRow = (label, type, value, onChange) => {
+      const row = doc.createElement("div");
+      row.className = "prop-row";
+      
+      // Visual Ports
+      row.innerHTML = `<div class="row-port in"></div><span class="label">${label}</span>`;
+      
+      const input = doc.createElement("input");
+      
+      // Configure Input Type
+      if (type === "number") {
+        input.type = "number";
+        input.step = "0.1";
+        input.value = typeof value === 'number' ? value.toFixed(2) : 0;
+      } else if (type === "text") {
+        input.type = "text";
+        input.value = value;
+      } else if (type === "color") {
+        input.type = "color";
+        input.value = "#" + value.getHexString();
+      }
+
+      // --- TWO-WAY BINDING (UI -> 3D) ---
+      input.oninput = (e) => {
+        const val = e.target.value;
+        
+        // Update Data
+        if (type === "number") {
+          const num = parseFloat(val);
+          if(!isNaN(num)) onChange(num);
+        } else {
+          onChange(val);
+        }
+
+        // ⚡ CRITICAL UPDATES: Force everything to refresh immediately
+        if (obj.updateMatrixWorld) obj.updateMatrixWorld(); // Update Physics
+        services.controlsSvc.update(); // Update Selection Box Helper
+        services.rendererSvc.renderer.render(services.rendererSvc.scene, services.rendererSvc.camera); // Re-draw Scene
+      };
+
+      row.appendChild(input);
+      row.insertAdjacentHTML("beforeend", `<div class="row-port out"></div>`);
+      body.appendChild(row);
+
+      return input;
+    };
+
+    // --- Map Properties ---
+    const inputs = {};
+
+    // Position
+    inputs.px = addRow("Pos X", "number", obj.position.x, v => obj.position.x = v);
+    inputs.py = addRow("Pos Y", "number", obj.position.y, v => obj.position.y = v);
+    inputs.pz = addRow("Pos Z", "number", obj.position.z, v => obj.position.z = v);
+
+    // Color (if mesh)
+    if (obj.material && obj.material.color) {
+      inputs.col = addRow("Color", "color", obj.material.color, v => obj.material.color.set(v));
+    }
+
+    // Track node for updates
+    activeNodes.set(obj.id, { el: node, inputs });
+    canvas.appendChild(node);
+  };
+
+  // ===============================================
+  // 🔄 EVENT LISTENERS
+  // ===============================================
+
+  // 1. Selection Changed -> Rebuild Graph
+  const onSelection = (e) => {
+    if (win.closed) return;
+    const ids = e.detail.ids;
     
+    canvas.innerHTML = "";
+    activeNodes.clear();
+
     if (ids.length === 0) {
       canvas.innerHTML = `<div class="empty-state"><h3>No Selection</h3><p>Select objects in the 3D Viewport</p></div>`;
       status.textContent = "Idle";
       return;
     }
 
-    status.textContent = `${ids.length} Object(s) Active`;
-
-    // Render Nodes
-    ids.forEach((id, index) => {
+    status.textContent = `Editing ${ids.length} Node(s)`;
+    ids.forEach((id, i) => {
       const obj = services.sceneSvc.getObject(id);
-      if (!obj) return;
-
-      const node = document.createElement("div");
-      node.className = "node-card";
-      // Auto-layout logic (Simple cascade)
-      node.style.left = `${40 + (index * 240)}px`;
-      node.style.top = "40px";
-
-      node.innerHTML = `
-        <div class="node-header">
-          <span>${obj.name || "Untitled"}</span>
-          <span style="opacity:0.5">ID:${id.substr(0,4)}</span>
-        </div>
-        <div class="node-body">
-          <div class="prop-row"><span>Type</span> <span class="prop-val">${obj.type}</span></div>
-          <div class="prop-row"><span>Vis</span> <span class="prop-val">${obj.visible}</span></div>
-          <hr style="border:0;border-top:1px solid #444;margin:8px 0">
-          <div class="prop-row"><span>Pos X</span> <span class="prop-val">${obj.position.x.toFixed(2)}</span></div>
-          <div class="prop-row"><span>Pos Y</span> <span class="prop-val">${obj.position.y.toFixed(2)}</span></div>
-          <div class="prop-row"><span>Pos Z</span> <span class="prop-val">${obj.position.z.toFixed(2)}</span></div>
-        </div>
-      `;
-      canvas.appendChild(node);
+      if (obj) createNode(obj, i);
     });
   };
 
-  const onSelectionChange = (e) => {
+  // 2. Scene Changed (Gizmo Drag) -> Update UI Inputs
+  const onSceneUpdate = () => {
     if (win.closed) return;
-    clearTimeout(debounceTimer);
-    // Debounce to prevent lag on mass-selection
-    debounceTimer = setTimeout(() => updateNodes(e.detail.ids), 50);
+    
+    activeNodes.forEach((data, id) => {
+      const obj = services.sceneSvc.getObject(id);
+      if (!obj) return;
+      
+      // Smart Update: Only update if value drifted & not focused
+      const updateIfDiff = (input, val) => {
+        if (!input) return;
+        const currentVal = parseFloat(input.value);
+        if (doc.activeElement !== input && Math.abs(currentVal - val) > 0.01) {
+          input.value = val.toFixed(2);
+        }
+      };
+
+      updateIfDiff(data.inputs.px, obj.position.x);
+      updateIfDiff(data.inputs.py, obj.position.y);
+      updateIfDiff(data.inputs.pz, obj.position.z);
+    });
   };
 
-  eventBus.addEventListener("selection:changed", onSelectionChange);
+  // Subscribe
+  eventBus.addEventListener("selection:changed", onSelection);
+  eventBus.addEventListener("scene:changed", onSceneUpdate);
 
-  // D. State Persistence (Save Position on Close)
-  win.addEventListener("beforeunload", () => {
-    if(!win.closed) {
-      const state = `width=${win.outerWidth},height=${win.outerHeight},left=${win.screenX},top=${win.screenY}`;
-      localStorage.setItem(storageKey, state);
-    }
-    // Cleanup listener
-    eventBus.removeEventListener("selection:changed", onSelectionChange);
-    if (onClose) onClose();
-  });
-
-  // E. Health Check (Heartbeat)
-  // Handles case where user Force Quits the window or Browser crashes
-  const heartBeat = setInterval(() => {
+  // ===============================================
+  // 🧹 CLEANUP & LIFECYCLE
+  // ===============================================
+  
+  // Heartbeat to detect if user force-closed window
+  const hb = setInterval(() => {
     if (win.closed) {
-      clearInterval(heartBeat);
-      eventBus.removeEventListener("selection:changed", onSelectionChange);
+      clearInterval(hb);
+      eventBus.removeEventListener("selection:changed", onSelection);
+      eventBus.removeEventListener("scene:changed", onSceneUpdate);
       if (onClose) onClose();
     }
   }, 1000);
 
-  // F. Parent Window Closure
-  window.addEventListener("beforeunload", () => {
-    if (win && !win.closed) win.close();
-  });
-
-  return {
-    destroy: () => {
-      clearInterval(heartBeat);
-      eventBus.removeEventListener("selection:changed", onSelectionChange);
-      if (win && !win.closed) win.close();
+  // Save position on close
+  win.onbeforeunload = () => {
+    if(!win.closed) {
+      localStorage.setItem(storageKey, `width=${win.outerWidth},height=${win.outerHeight},left=${win.screenX},top=${win.screenY}`);
     }
   };
+  
+  // If Main App closes, close popup
+  window.addEventListener("beforeunload", () => { 
+    if(win && !win.closed) win.close(); 
+  });
+
+  return { destroy: () => win.close() };
 }

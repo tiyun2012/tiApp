@@ -32,6 +32,12 @@ export class ControlsService {
     });
   }
 
+  // ✅ NEW: Called every frame to sync helpers with moving objects
+  update() {
+    this.orbit.update();
+    this.helpers.forEach(h => h.update());
+  }
+
   focusOnSelection() {
     const ids = Array.from(this.sceneSvc.selectedIds);
     if (ids.length === 0) return;
