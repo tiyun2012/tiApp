@@ -1,0 +1,5 @@
+﻿.mini-outliner { position:absolute; left:12px; top:46px; width:240px; background:#222; border:1px solid #333; border-radius:6px; z-index:50; }
+.mini-outliner .header { padding:8px; background:#1f1f1f; border-bottom:1px solid #333; font-weight:700; color:#ddd; }
+.outliner-item { padding:6px 10px; color:#888; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.02); }
+.outliner-item:hover { color:#fff; background:rgba(255,255,255,0.05); }
+.outliner-item.selected { background:#094771; color:#fff; border-left:3px solid #007fd4; }

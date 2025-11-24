@@ -1,0 +1,2 @@
+﻿export function saveProject(state) { return JSON.stringify({ version: 1, timestamp: Date.now(), state }, null, 2); }
+export function loadProject(json) { try { return JSON.parse(json); } catch (e) { return null; } }

@@ -1,0 +1,12 @@
+﻿:root{ --bg:#111; --panel:#222; --header:#1f1f1f; --accent:#007fd4; --text:#ddd; --muted:#888; --border:#333; }
+*{box-sizing:border-box}
+html,body,#app{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif;font-size:13px}
+.main-menu{height:34px;background:var(--header);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:6px 12px;gap:8px}
+.app-logo{font-weight:700;color:var(--accent)}
+.viewport{position:relative;flex:1;height:calc(100vh - 34px);overflow:hidden}
+.btn{background:#333;border:1px solid #444;color:var(--text);padding:4px 8px;border-radius:4px;cursor:pointer}
+.btn:hover{background:#444}
+.window{position:absolute;background:var(--panel);border:1px solid var(--border);box-shadow:0 10px 40px rgba(0,0,0,0.6);border-radius:6px;overflow:hidden;display:flex;flex-direction:column;z-index:5000}
+.window-header{height:32px;background:var(--header);display:flex;align-items:center;justify-content:space-between;padding:0 10px;cursor:move;color:var(--text);font-weight:700;border-bottom:1px solid var(--border)}
+.window-content{padding:8px;overflow:auto}

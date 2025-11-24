@@ -1,0 +1,4 @@
+﻿.ti-context-menu { position:absolute; background:#252526; border:1px solid #454545; border-radius:4px; padding:4px 0; min-width:140px; z-index:9999; }
+.ti-context-menu .item { padding:6px 12px; cursor:pointer; color:#ccc; }
+.ti-context-menu .item:hover { background:#094771; color:#fff; }
+.ti-context-menu hr { border:0; border-top:1px solid #454545; margin:4px 0; }
