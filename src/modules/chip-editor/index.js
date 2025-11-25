@@ -1,228 +1,377 @@
 ﻿import eventBus from "../../services/EventBus.js";
 import { createWindow } from "../../ui/Window.js";
+import * as THREE from "three";
 
-// Helper to locate the CSS file relative to this module
 const CSS_URL = new URL('./chip-editor.css', import.meta.url).href;
 
 export async function init({ container, services, onClose }) {
   const storageKey = "ti3d_chip_window";
   
-  // 1. Fetch CSS text manually
-  // This ensures the popup has styles even if the browser blocks local file links
-  const cssText = await fetch(CSS_URL).then(res => res.text()).catch(() => "");
-
-  // 2. Open Native Window
-  let win = null;
+  // 1. 🛡️ SAFE CSS PRELOADING
+  let cssText = "";
   try {
-    const saved = localStorage.getItem(storageKey);
-    // Default size/position if no saved state
-    win = window.open("", "Ti3D_ChipEditor", saved || "width=900,height=600,left=150,top=150");
+    const response = await fetch(CSS_URL);
+    if (response.ok) {
+      cssText = await response.text();
+    }
+  } catch (e) {
+    console.warn("Could not load Chip Editor CSS", e);
+  }
+
+  let win = null;
+  let isPiP = false;
+
+  // 2. 🛡️ THREE-TIER WINDOW STRATEGY
+  try {
+    // 🚀 TIER A: Document Picture-in-Picture (True Always on Top)
+    if ('documentPictureInPicture' in window) {
+      console.log("🎨 Using Picture-in-Picture (Always on Top)");
+      win = await window.documentPictureInPicture.requestWindow({
+        width: 320,  // Optimal PiP size
+        height: 520
+      });
+      isPiP = true;
+    } 
+    // 🚀 TIER B: Standard Popup (Cross-browser fallback)
+    else {
+      console.log("🪟 Using Standard Popup");
+      const saved = localStorage.getItem(storageKey);
+      const features = (saved || "width=800,height=600,left=150,top=150") + ",popup=yes,resizable=yes";
+      win = window.open("", "Ti3D_ChipEditor", features);
+    }
   } catch(e) {
-    console.warn("Window open failed", e);
+    console.warn("❌ External window failed:", e);
   }
 
-  // 3. Fallback: Internal Window (If Popup Blocked)
+  // 🚀 TIER C: Internal Window (Popup blocked)
   if (!win || win.closed) {
-    console.warn("Popup blocked. Using internal fallback.");
-    const internal = createWindow({ title: "🔌 Chip Editor (Internal)", width: 500, height: 400 });
-    internal.querySelector(".window-content").innerHTML = `<div style="padding:20px;text-align:center;color:#888">Popups blocked.<br>Using fallback mode.</div>`;
-    return { destroy: () => internal.remove() };
+    console.log("🏠 Using internal fallback (popup blocked)");
+    const internal = createWindow({ 
+      title: "🔌 Chip Editor (Internal)", 
+      width: 500, 
+      height: 400 
+    });
+    
+    const cleanup = setupEditorLogic(
+      internal.querySelector(".window-content"), 
+      document, 
+      false, 
+      services
+    );
+    
+    return { 
+      destroy: () => {
+        cleanup();
+        internal.remove();
+      },
+      bringToFront: () => {
+        internal.style.zIndex = "10000";
+      }
+    };
   }
 
-  // 4. Setup External Document
+  // 3. 🎨 SETUP EXTERNAL WINDOW (A or B)
   const doc = win.document;
-  doc.title = "🔌 Node Graph";
   
-  // Inject Styles
+  // Manual CSS injection for external windows
   const styleEl = doc.createElement("style");
   styleEl.textContent = cssText;
   doc.head.appendChild(styleEl);
+  
+  // Set title for standard popups
+  if (!isPiP) {
+    doc.title = "🔌 Node Graph - Ti3D";
+    try {
+      const link = doc.createElement("link");
+      link.rel = "icon";
+      link.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔌</text></svg>";
+      doc.head.appendChild(link);
+    } catch (e) {}
+  }
 
-  // Inject Skeleton HTML
-  doc.body.innerHTML = `
+  // 4. 🧩 INITIALIZE EDITOR LOGIC
+  const cleanup = setupEditorLogic(doc.body, doc, isPiP, services);
+
+  // 5. 🔄 LIFECYCLE MANAGEMENT
+  const handleExternalClose = () => {
+    cleanup();
+    if (onClose) onClose();
+  };
+
+  // Different close events for PiP vs Popup
+  if (isPiP) {
+    win.addEventListener("pagehide", handleExternalClose);
+  } else {
+    // Polling for standard popups
+    const heartbeat = setInterval(() => {
+      if (win.closed) {
+        clearInterval(heartbeat);
+        handleExternalClose();
+      }
+    }, 1000);
+    
+    // Save window position on close
+    win.addEventListener("beforeunload", () => {
+      if (!win.closed) {
+        try {
+          localStorage.setItem(storageKey, 
+            `width=${win.outerWidth},height=${win.outerHeight},left=${win.screenX},top=${win.screenY}`
+          );
+        } catch (e) {
+          console.warn("Could not save window position:", e);
+        }
+      }
+    });
+  }
+
+  // Close external window when main app closes
+  window.addEventListener("beforeunload", () => {
+    if (win && !win.closed) {
+      win.close();
+    }
+  });
+
+  return { 
+    destroy: () => {
+      cleanup();
+      if (win && !win.closed) win.close();
+    },
+    bringToFront: () => {
+      if (win && !win.closed && !isPiP) {
+        win.focus();
+      }
+    }
+  };
+}
+
+// ============================================================
+// 🧩 SHARED EDITOR LOGIC (PiP, Popup, and Internal)
+// ============================================================
+function setupEditorLogic(rootElement, docContext, isAlwaysOnTop, services) {
+  rootElement.innerHTML = `
     <div class="chip-header">
-      <span>Scene Graph</span>
+      <span>Scene Graph ${isAlwaysOnTop ? '📌' : ''}</span>
       <span id="status" style="font-size:11px;opacity:0.6">Ready</span>
     </div>
     <div class="chip-canvas" id="canvas"></div>
   `;
 
-  const canvas = doc.getElementById("canvas");
-  const status = doc.getElementById("status");
+  const canvas = rootElement.querySelector("#canvas");
+  const status = rootElement.querySelector("#status");
+  const activeNodes = new Map();
 
-  // ===============================================
-  // 🛠 NODE FACTORY & DATA BINDING
-  // ===============================================
-  const activeNodes = new Map(); // Stores references to DOM elements for updates
+  // 🎯 Input Debouncing Manager
+  const debounceManager = new Map();
 
+  // --- Node Factory ---
   const createNode = (obj, index) => {
-    const node = doc.createElement("div");
+    const node = docContext.createElement("div");
     node.className = "node-card";
-    // Simple cascading layout
-    node.style.left = `${50 + (index * 260)}px`;
+    node.style.left = `${20 + (index * 250)}px`;
     node.style.top = "50px";
 
-    // Node Header
     node.innerHTML = `
       <div class="node-header">
         <div class="port in" title="Input Flow"></div>
-        <span>${obj.name} <small style="opacity:0.5">(${obj.type})</small></span>
+        <span>${obj.name || 'Unnamed'} <small style="opacity:0.5">(${obj.type})</small></span>
         <div class="port out" title="Output Object"></div>
       </div>
       <div class="node-body"></div>
     `;
 
     const body = node.querySelector(".node-body");
+    const nodeId = obj.userData.id;
 
-    // --- Helper: Create Property Row ---
-    const addRow = (label, type, value, onChange) => {
-      const row = doc.createElement("div");
+    // 🎯 Input Row Helper with Better UX
+    const addRow = (label, type, value, onChange, propertyKey) => {
+      const row = docContext.createElement("div");
       row.className = "prop-row";
+      row.innerHTML = `<div class="row-port in" title="Data Input"></div><span class="label">${label}</span>`;
       
-      // Visual Ports
-      row.innerHTML = `<div class="row-port in"></div><span class="label">${label}</span>`;
+      const input = docContext.createElement("input");
+      const inputId = `${nodeId}-${propertyKey}`;
       
-      const input = doc.createElement("input");
-      
-      // Configure Input Type
-      if (type === "number") {
-        input.type = "number";
-        input.step = "0.1";
-        input.value = typeof value === 'number' ? value.toFixed(2) : 0;
-      } else if (type === "text") {
-        input.type = "text";
-        input.value = value;
-      } else if (type === "color") {
-        input.type = "color";
-        input.value = "#" + value.getHexString();
+      // Type-specific configuration
+      if (type === "number") { 
+        input.type = "number"; 
+        input.step = "0.1"; 
+        input.value = typeof value === 'number' ? value.toFixed(2) : '0.00';
+      }
+      else if (type === "text") { 
+        input.type = "text"; 
+        input.value = value || ''; 
+      }
+      else if (type === "color") { 
+        input.type = "color"; 
+        input.value = value && value.isColor ? `#${value.getHexString()}` : '#ffffff'; 
       }
 
-      // --- TWO-WAY BINDING (UI -> 3D) ---
-      input.oninput = (e) => {
+      // 🎯 Smart Input Handling with Debouncing
+      input.addEventListener('input', (e) => {
         const val = e.target.value;
         
-        // Update Data
-        if (type === "number") {
-          const num = parseFloat(val);
-          if(!isNaN(num)) onChange(num);
-        } else {
-          onChange(val);
+        // Clear existing timeout
+        if (debounceManager.has(inputId)) {
+          clearTimeout(debounceManager.get(inputId));
         }
-
-        // ⚡ CRITICAL UPDATES: Force everything to refresh immediately
-        if (obj.updateMatrixWorld) obj.updateMatrixWorld(); // Update Physics
         
-        // Emit custom event so ControlsService knows to move the BoxHelper
-        eventBus.dispatchEvent(new CustomEvent('object:transformed', { 
-          detail: { objectId: obj.id } 
-        }));
-
-        // Re-draw Scene
-        services.rendererSvc.renderer.render(services.rendererSvc.scene, services.rendererSvc.camera); 
-      };
+        // Set new timeout with type-specific delay
+        const timeoutId = setTimeout(() => {
+          try {
+            let processedValue = val;
+            
+            if (type === "number") { 
+              const num = parseFloat(val);
+              if (!isNaN(num)) processedValue = num;
+              else return; // Invalid number, skip update
+            } else if (type === "color") {
+              processedValue = new THREE.Color(val);
+            }
+            
+            // Apply the change
+            onChange(processedValue);
+            
+            // 🎯 Force updates for smooth experience
+            if (obj.updateMatrixWorld) obj.updateMatrixWorld(true);
+            
+            // Signal transformation
+            eventBus.dispatchEvent(new CustomEvent('object:transformed', { 
+              detail: { objectId: nodeId }
+            }));
+            
+            // Trigger render
+            if (services.rendererSvc && services.rendererSvc.renderer) {
+              services.rendererSvc.renderer.render(
+                services.rendererSvc.scene, 
+                services.rendererSvc.camera
+              );
+            }
+            
+          } catch (error) {
+            console.warn('Input processing error:', error);
+          } finally {
+            debounceManager.delete(inputId);
+          }
+        }, type === "number" ? 150 : 50);
+        
+        debounceManager.set(inputId, timeoutId);
+      });
 
       row.appendChild(input);
-      row.insertAdjacentHTML("beforeend", `<div class="row-port out"></div>`);
+      row.insertAdjacentHTML("beforeend", `<div class="row-port out" title="Data Output"></div>`);
       body.appendChild(row);
-
       return input;
     };
 
-    // --- Map Properties ---
     const inputs = {};
-
-    // Position
-    inputs.px = addRow("Pos X", "number", obj.position.x, v => obj.position.x = v);
-    inputs.py = addRow("Pos Y", "number", obj.position.y, v => obj.position.y = v);
-    inputs.pz = addRow("Pos Z", "number", obj.position.z, v => obj.position.z = v);
-
-    // Color (if mesh)
-    if (obj.material && obj.material.color) {
-      inputs.col = addRow("Color", "color", obj.material.color, v => obj.material.color.set(v));
+    
+    // Position properties
+    inputs.px = addRow("Pos X", "number", obj.position.x, v => { obj.position.x = v; }, "posX");
+    inputs.py = addRow("Pos Y", "number", obj.position.y, v => { obj.position.y = v; }, "posY");
+    inputs.pz = addRow("Pos Z", "number", obj.position.z, v => { obj.position.z = v; }, "posZ");
+    
+    // Color property (if available)
+    if (obj.material && obj.material.color && obj.material.color.isColor) {
+      inputs.col = addRow("Color", "color", obj.material.color, v => { 
+        obj.material.color.copy(v); 
+      }, "color");
     }
 
-    // Track node for updates
-    activeNodes.set(obj.id, { el: node, inputs });
+    activeNodes.set(nodeId, { inputs, node });
     canvas.appendChild(node);
+    
+    return node;
   };
 
-  // ===============================================
-  // 🔄 EVENT LISTENERS
-  // ===============================================
-
-  // 1. Selection Changed -> Rebuild Graph
+  // --- Event Handlers ---
   const onSelection = (e) => {
-    if (win.closed) return;
-    const ids = e.detail.ids;
+    // Clear any pending debounced updates
+    debounceManager.forEach((timeoutId) => {
+      clearTimeout(timeoutId);
+    });
+    debounceManager.clear();
     
+    // Clear previous state
     canvas.innerHTML = "";
     activeNodes.clear();
-
+    
+    const ids = e.detail.ids;
+    
     if (ids.length === 0) {
-      canvas.innerHTML = `<div class="empty-state"><h3>No Selection</h3><p>Select objects in the 3D Viewport</p></div>`;
+      canvas.innerHTML = `
+        <div class="empty-state">
+          <h3>No Selection</h3>
+          <p>Select objects in the 3D Viewport</p>
+        </div>
+      `;
       status.textContent = "Idle";
       return;
     }
 
     status.textContent = `Editing ${ids.length} Node(s)`;
-    ids.forEach((id, i) => {
+    
+    // Create nodes for selected objects
+    ids.forEach((id, index) => {
       const obj = services.sceneSvc.getObject(id);
-      if (obj) createNode(obj, i);
+      if (obj && obj.userData && obj.userData.id) {
+        createNode(obj, index);
+      }
     });
   };
 
-  // 2. Scene Changed (Gizmo Drag) -> Update UI Inputs
   const onSceneUpdate = () => {
-    if (win.closed) return;
-    
+    // 🎯 Smart UI Sync: Only update if values changed significantly
     activeNodes.forEach((data, id) => {
       const obj = services.sceneSvc.getObject(id);
       if (!obj) return;
       
-      // Smart Update: Only update if value drifted & not focused
-      const updateIfDiff = (input, val) => {
-        if (!input) return;
+      const updateIfChanged = (input, newValue, threshold = 0.01) => {
+        if (!input || input === docContext.activeElement) return;
+        
         const currentVal = parseFloat(input.value);
-        if (doc.activeElement !== input && Math.abs(currentVal - val) > 0.01) {
-          input.value = val.toFixed(2);
+        if (Math.abs(currentVal - newValue) > threshold) {
+          input.value = newValue.toFixed(2);
         }
       };
-
-      updateIfDiff(data.inputs.px, obj.position.x);
-      updateIfDiff(data.inputs.py, obj.position.y);
-      updateIfDiff(data.inputs.pz, obj.position.z);
+      
+      // Update position inputs
+      updateIfChanged(data.inputs.px, obj.position.x);
+      updateIfChanged(data.inputs.py, obj.position.y);
+      updateIfChanged(data.inputs.pz, obj.position.z);
+      
+      // Update color input if exists
+      if (data.inputs.col && obj.material && obj.material.color) {
+        const currentHex = data.inputs.col.value;
+        const newHex = `#${obj.material.color.getHexString()}`;
+        if (currentHex !== newHex && data.inputs.col !== docContext.activeElement) {
+          data.inputs.col.value = newHex;
+        }
+      }
     });
   };
 
-  // Subscribe
+  // 🎯 Initial render if objects are already selected
+  if (services.sceneSvc.selectedIds && services.sceneSvc.selectedIds.size > 0) {
+    onSelection({ detail: { ids: Array.from(services.sceneSvc.selectedIds) } });
+  }
+
+  // Attach to global event bus
   eventBus.addEventListener("selection:changed", onSelection);
   eventBus.addEventListener("scene:changed", onSceneUpdate);
 
-  // ===============================================
-  // 🧹 CLEANUP & LIFECYCLE
-  // ===============================================
-  
-  // Heartbeat to detect if user force-closed window
-  const hb = setInterval(() => {
-    if (win.closed) {
-      clearInterval(hb);
-      eventBus.removeEventListener("selection:changed", onSelection);
-      eventBus.removeEventListener("scene:changed", onSceneUpdate);
-      if (onClose) onClose();
-    }
-  }, 1000);
-
-  // Save position on close
-  win.onbeforeunload = () => {
-    if(!win.closed) {
-      localStorage.setItem(storageKey, `width=${win.outerWidth},height=${win.outerHeight},left=${win.screenX},top=${win.screenY}`);
-    }
+  // 🧹 Return cleanup function
+  return () => {
+    // Clear all pending timeouts
+    debounceManager.forEach((timeoutId) => {
+      clearTimeout(timeoutId);
+    });
+    debounceManager.clear();
+    
+    // Remove event listeners
+    eventBus.removeEventListener("selection:changed", onSelection);
+    eventBus.removeEventListener("scene:changed", onSceneUpdate);
+    
+    // Clear nodes
+    activeNodes.clear();
   };
-  
-  // If Main App closes, close popup
-  window.addEventListener("beforeunload", () => { 
-    if(win && !win.closed) win.close(); 
-  });
-
-  return { destroy: () => win.close() };
 }

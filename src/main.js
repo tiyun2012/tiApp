@@ -24,7 +24,7 @@ async function bootstrap() {
     const controlsSvc = new ControlsService(rendererSvc.camera, rendererSvc.renderer.domElement, sceneSvc);
     const pickingSvc = new PickingService(rendererSvc, sceneSvc, controlsSvc);
 
-    // ✅ SAFE LISTENER: Checks for existence before access
+    // ✅ SAFE LISTENER
     eventBus.addEventListener('object:transformed', () => {
       if (sceneSvc && sceneSvc.selectedIds && sceneSvc.selectedIds.size > 0) {
         controlsSvc.update(); 
@@ -94,27 +94,48 @@ async function bootstrap() {
         const c = e.detail.ids.length; counter.textContent = `${c} selected`; counter.style.color = c > 0 ? "#fff" : "#888";
       });
 
+      // 🔌 CHIP EDITOR BUTTON (Fixed)
       const chipBtn = document.createElement("button");
       chipBtn.className = "btn"; chipBtn.textContent = "Open Chip Editor";
       chipBtn.onclick = async () => {
-        if (chipEditorInstance) { chipEditorInstance.destroy(); chipEditorInstance = null; chipBtn.textContent = "Open Chip Editor"; return; }
+        // Close Logic
+        if (chipEditorInstance) { 
+          // 🛑 Check if destroy exists before calling it (Safety check)
+          if (typeof chipEditorInstance.destroy === 'function') {
+            chipEditorInstance.destroy(); 
+          }
+          chipEditorInstance = null; 
+          chipBtn.textContent = "Open Chip Editor"; 
+          return; 
+        }
+        
         chipBtn.disabled = true;
         try {
           const mod = await import("./modules/chip-editor/index.js");
-          chipEditorInstance = mod.init({
+          
+          // ✅ FIXED: Added 'await' here because init() is now async
+          chipEditorInstance = await mod.init({
             container: document.body,
             services: { sceneSvc, rendererSvc, controlsSvc, eventBus },
-            onClose: () => { chipEditorInstance = null; chipBtn.textContent = "Open Chip Editor"; chipBtn.disabled = false; }
+            onClose: () => { 
+              chipEditorInstance = null; 
+              chipBtn.textContent = "Open Chip Editor"; 
+              chipBtn.disabled = false; 
+            }
           });
+          
           chipBtn.textContent = "Close Chip Editor";
-        } catch (e) { console.error(e); } finally { chipBtn.disabled = false; }
+        } catch (e) { 
+          console.error(e); 
+        } finally { 
+          chipBtn.disabled = false; 
+        }
       };
       mainMenu.appendChild(chipBtn);
     }
 
     if (spinner) spinner.remove();
 
-    // Start Loop
     rendererSvc.start(() => {
       controlsSvc.update();
     });
